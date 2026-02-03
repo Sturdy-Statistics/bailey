@@ -5,7 +5,7 @@
    environment, encrypting/decrypting data, and managing key rotation."
   (:require
    [bailey.keys.server :as server]
-   [bailey.keys.admin :as admin]))
+   [bailey.keys.longterm :as admin]))
 
 ;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 1. Build-Time / Admin Tools

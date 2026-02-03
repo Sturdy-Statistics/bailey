@@ -1,5 +1,7 @@
 # Bailey
 
+[![Clojars Project](https://img.shields.io/clojars/v/com.sturdystats/bailey.svg)](https://clojars.org/com.sturdystats/bailey)
+
 **Bailey** is a small, opinionated Clojure library for managing **server-side encryption keys** with strong operational safety guarantees.
 
 It is designed for applications that need:
@@ -10,6 +12,14 @@ It is designed for applications that need:
 
 Bailey does **not** implement cryptographic primitives.
 It uses the well-reviewed library [Tempel](https://cljdoc.org/d/com.taoensso/tempel) to implement  a robust, auditable key lifecycle.
+
+## Installation
+
+Add to `deps.edn`:
+
+```clojure
+{:deps {com.sturdystats/bailey {:mvn/version "VERSION"}}}
+```
 
 ## Design goals
 
