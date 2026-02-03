@@ -1,0 +1,204 @@
+(ns bailey.keys.server
+  (:require
+   [babashka.fs :as fs]
+   [sturdy.fs :as sfs]
+   [clojure.java.io :as io]
+
+   [bailey.util :as u]
+
+   [taoensso.tempel :as tempel]
+   [taoensso.truss :refer [have]]
+   [taoensso.telemere :as t])
+  (:import
+   (java.io InputStream ByteArrayOutputStream)))
+
+;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; state
+
+(def ^:private backup-public-key* (atom nil))
+(def ^:private server-keychain!!* (atom nil))
+(def ^:private secrets-dir* (atom nil))
+
+(defn- set-secrets-dir [path]
+  (reset! secrets-dir* path))
+
+(defn- require-secrets-dir []
+  (or @secrets-dir*
+      (throw (ex-info "Server key not loaded. HINT: Did you run `init!`?" {}))))
+
+(defn- require-server-key!! []
+  (or @server-keychain!!*
+      (throw (ex-info "Server key not loaded. HINT: Did you run `init!`?" {}))))
+
+(defn- keychain-path []
+  (fs/path (require-secrets-dir) "keychain.encrypted"))
+
+;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; backup key: Sturdy Stats; longterm
+
+(defn- slurp-bytes
+  "Read all bytes from an InputStream and return a byte[]."
+  ^bytes [^InputStream is]
+  (let [buf (byte-array 8192)
+        baos (ByteArrayOutputStream.)]
+    (loop []
+      (let [n (.read is buf)]
+        (when (pos? n)
+          (.write baos buf 0 n)
+          (recur))))
+    (.toByteArray baos)))
+
+(defn load-backup-public-key
+  "Loads the baked-in public key from the Uberjar classpath."
+  []
+  (if-let [res (io/resource "tempel_server_keys/backup_pub.key")]
+    (with-open [is (io/input-stream res)]
+      (let [k (tempel/keychain-thaw-public (slurp-bytes is))]
+        (reset! backup-public-key* k)
+        k))
+    (throw (ex-info "FATAL: Backup public key not found in resources."
+                    {:hint "Did you run the generation script before building?"}))))
+
+(defn- require-backup-key []
+  (or @backup-public-key* (load-backup-public-key)))
+
+;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; server key: specific to this server
+
+(defn- ensure-tempel-keychain!
+  [password!!]
+  (let [p (keychain-path)]
+    (when-not (fs/exists? p)
+      (let [backup-key (require-backup-key)
+
+            kc!!  (tempel/keychain {})
+            kc-e  (tempel/keychain-encrypt kc!! {:pbkdf-nwf  :ref-1000-msecs
+                                                 :password   (have bytes? password!!)
+                                                 :backup-key backup-key})]
+        (-> p
+            (sfs/spit-bytes! kc-e {:atomic? true})
+            sfs/chmod-600!)
+
+        (t/log! {:level :info
+                 :id ::create-server-keychain
+                 :msg "saved server keychain"
+                 :data {:full-keychain-path p}})))
+    p))
+
+(defn load-keychain!!
+  [read-server-password!!]
+  (let [pw!! (have bytes? (read-server-password!!))]
+
+    (try
+      (let [p     (ensure-tempel-keychain! pw!!)
+            kc-e  (sfs/slurp-bytes p)
+            kc!!  (tempel/keychain-decrypt kc-e {:password pw!!})]
+        (reset! server-keychain!!* kc!!)
+        kc!!)
+      (finally
+        (u/zero-byte-array pw!!)))))
+
+;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Public API
+
+(defn init!
+  "Initialize server encryption keys.  Should be called on server startup"
+  [{:keys [secrets-dir read-server-password!!]}]
+  (set-secrets-dir secrets-dir)
+  (load-backup-public-key)
+  (load-keychain!! read-server-password!!))
+
+(defn encrypt
+  "Encrypt data using the loaded server keychain.
+
+  Note: This data is implicitly recoverable via the backup key
+  because the keychain itself is recoverable.
+
+  If `include-backup?` is truthy, also perform asymmetric encryption
+  using the backup key.  This adds overhead, but guarantees the data
+  can be decrypted even if BOTH the password AND the server keychain
+  are lost."
+  [secret-data & {:keys [include-backup?]}]
+  (let [kc!! (require-server-key!!)]
+    (if-not include-backup?
+      ;; simple encryption
+      (tempel/encrypt-with-symmetric-key
+       (have bytes? secret-data)
+       kc!!)
+      ;; encrypt with backup
+      (let [backup-key (require-backup-key)]
+        (tempel/encrypt-with-symmetric-key
+         (have bytes? secret-data)
+         kc!!
+         {:backup-key backup-key})))))
+
+(defn decrypt
+  "decypt ciphertext made using `encrypt-sym`"
+  [encrypted-bytes]
+  (let [kc!! (require-server-key!!)]
+    (tempel/decrypt-with-symmetric-key
+     (have bytes? encrypted-bytes)
+     kc!!)))
+
+(defn rotate-server-keys!
+  "Generates a fresh symmetric key, promotes it to primary, and demotes existing keys.
+   Updates the encrypted file on disk and the running in-memory atom.
+
+   Requires the TPM password to re-encrypt the updated keychain file."
+  [read-server-password!!]
+
+  (let [pw!! (have bytes? (read-server-password!!))]
+
+    (try
+      (let [old-kc!! (require-server-key!!)
+
+            ;; add new key: (:random generates a fresh key, default priority is top/primary)
+            rotated-kc!! (tempel/keychain-add-symmetric-key old-kc!! :random)
+
+            ;; re-encrypt the updated keychain
+            backup-key (require-backup-key)
+            final-kc-e (tempel/keychain-encrypt
+                        rotated-kc!!
+                        {:pbkdf-nwf  :ref-1000-msecs
+                         :password   pw!!
+                         :backup-key backup-key})]
+
+        ;; atomic write to disk
+        (-> (keychain-path)
+            (sfs/spit-bytes! final-kc-e {:atomic? true})
+            sfs/chmod-600!)
+
+        ;; update memory (hot swap)
+        (reset! server-keychain!!* rotated-kc!!)
+
+        (t/log! {:level :warn
+                 :id    ::rotate-server-keys
+                 :msg   "Server keys rotated successfully. Old keys retained for decryption."
+                 :data  {:total-symmetric-keys (count (:symmetric-keys rotated-kc!!))}}))
+
+      (finally
+        (u/zero-byte-array pw!!)))))
+
+;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; RECOVERY TOOL (For Admin use only, locally)
+
+(defn recover-keychain-file
+  "Decodes an encrypted keychain file using the OFFLINE full backup key.
+   Returns the usable server keychain."
+  [path-to-encrypted-keychain path-to-offline-backup-keychain backup-password]
+  (let [offline-kc (tempel/keychain-decrypt
+                    (sfs/slurp-bytes path-to-offline-backup-keychain)
+                    {:password backup-password})
+
+        server-kc-e (sfs/slurp-bytes path-to-encrypted-keychain)]
+
+    ;; Use the Offline Keychain to unlock the Server Keychain
+    (tempel/keychain-decrypt server-kc-e {:backup-key offline-kc})))
+
+(defn decrypt-backup
+  "Decodes an encrypted ciphertext using the OFFLINE full backup key."
+  [{:keys [encrypted-bytes backup-full-keychain]}]
+  (tempel/decrypt-with-symmetric-key
+   (have bytes? encrypted-bytes)
+   nil
+   {:backup-key backup-full-keychain}))
