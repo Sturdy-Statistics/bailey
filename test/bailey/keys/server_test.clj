@@ -168,3 +168,23 @@
                                               :backup-full-keychain offline-kc})]
 
         (is (tempel/ba= secret decrypted))))))
+
+(deftest test-string-wrappers
+  (testing "String convenience wrappers handle UTF-8 correctly"
+
+    (bailey/init! {:keychain-path *test-keychain-path*
+                   :read-server-password!! mock-read-password})
+
+    ;; We use emojis to prove UTF-8 encoding is working
+    (let [original "my-secret-data-🐶"
+          enc      (bailey/encrypt-string original)
+          dec      (bailey/decrypt-string enc)]
+
+      ;; 1. Check data integrity
+      (is (= original dec)
+          "Decrypted string should match original exactly")
+
+      ;; 2. Check encryption actually happened
+      ;; (Compare bytes because 'enc' is byte[] and 'original' is string)
+      (is (not (java.util.Arrays/equals (.getBytes original "UTF-8") enc))
+          "Ciphertext bytes should differ from plaintext bytes"))))

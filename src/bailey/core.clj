@@ -62,6 +62,30 @@
   [ciphertext]
   (server/decrypt ciphertext))
 
+(defn encrypt-string
+  "Like `encrypt` but accepts a string as an argument.
+   Encodes the string to UTF-8 before encrypting.
+
+   NOTE: Strings are immutable and cannot be zero'd. If possible,
+   alter your workflow to use byte[] instead.
+
+   Returns encrypted bytes."
+  [s]
+  (when s
+    (server/encrypt (.getBytes s "UTF-8"))))
+
+(defn decrypt-string
+  "Like `decrypt` but returns a string.
+   Assumes the decrypted bytes are UTF-8 text.
+
+   NOTE: Strings are immutable and cannot be zero'd. If possible,
+   alter your workflow to use byte[] instead.
+
+   Returns decrypted string."
+  [ciphertext]
+  (when ciphertext
+    (String. (server/decrypt ciphertext) "UTF-8")))
+
 (defn encrypt-critical
   "Encrypts data with 'Belt and Suspenders' protection.
 
