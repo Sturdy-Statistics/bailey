@@ -4,6 +4,7 @@
    [babashka.fs :as fs]
    [sturdy.fs :as sfs]
    [taoensso.tempel :as tempel]
+   [bailey.core :as bailey]
    [bailey.keys.server :as server]
    [bailey.keys.longterm :as longterm]
    [bailey.test-support :as ts]
@@ -16,6 +17,7 @@
 
 (def ^:dynamic *test-secrets-dir* nil)
 (def ^:dynamic *test-resources-dir* nil)
+(def ^:dynamic *test-keychain-path* nil)
 (def ^:dynamic *mock-tpm-password* (.getBytes "mock-tpm-password" "US-ASCII"))
 
 (defn mock-read-password []
@@ -24,9 +26,11 @@
 (defn with-test-env [f]
   ;; Create unique temp dirs for every test run
   (let [secrets   (fs/create-temp-dir {:prefix "test-secrets"})
+        key-path  (fs/path secrets "keychain.encrypted")
         resources (fs/create-temp-dir {:prefix "test-resources"})]
     (binding [*test-secrets-dir* (str secrets)
-              *test-resources-dir* (str resources)]
+              *test-resources-dir* (str resources)
+              *test-keychain-path* (str key-path)]
       (try
         ;; 1. Run the "Offline Admin" setup to generate backup keys
         ;;    (We mock the password prompt by passing it directly)
@@ -58,39 +62,38 @@
 (deftest test-happy-path
   (testing "Server initializes and performs basic encryption"
     ;; Init
-    (server/init! {:secrets-dir *test-secrets-dir*
+    (bailey/init! {:keychain-path *test-keychain-path*
                    :read-server-password!! mock-read-password})
 
     (let [secret   (.getBytes "my-secret-data")
-          enc      (server/encrypt secret)
-          dec      (server/decrypt enc)]
+          enc      (bailey/encrypt secret)
+          dec      (bailey/decrypt enc)]
 
       (is (not (tempel/ba= secret enc)) "Ciphertext should differ from plaintext")
       (is (tempel/ba= secret dec) "Decryption should restore original data"))))
 
 (deftest test-key-rotation
   (testing "Key rotation preserves access to old data while securing new data"
-    (server/init! {:secrets-dir *test-secrets-dir*
+    (bailey/init! {:keychain-path *test-keychain-path*
                    :read-server-password!! mock-read-password})
 
     (let [data-v1      (.getBytes "data-written-before-rotation")
-          enc-v1       (server/encrypt data-v1)
+          enc-v1       (bailey/encrypt data-v1)
           old-kc       @@#'server/server-keychain!!*]
 
       ;; PERFORM ROTATION
       (server/rotate-server-keys! mock-read-password)
 
       (let [data-v2      (.getBytes "data-written-after-rotation")
-            enc-v2       (server/encrypt data-v2)
-
+            enc-v2       (bailey/encrypt data-v2)
             new-kc       @@#'server/server-keychain!!*]
 
         (testing "Backward compatibility"
-          (is (tempel/ba= data-v1 (server/decrypt enc-v1))
+          (is (tempel/ba= data-v1 (bailey/decrypt enc-v1))
               "Should still be able to decrypt OLD data"))
 
         (testing "Forward operation"
-          (is (tempel/ba= data-v2 (server/decrypt enc-v2))
+          (is (tempel/ba= data-v2 (bailey/decrypt enc-v2))
               "Should be able to decrypt NEW data"))
 
         (testing "Old cannot decrypt new"
@@ -110,17 +113,17 @@
   (testing "If TPM password is lost, we can recover the keychain file using offline admin keys"
 
     ;; 1. Setup normal server
-    (server/init! {:secrets-dir *test-secrets-dir*
+    (bailey/init! {:keychain-path *test-keychain-path*
                    :read-server-password!! mock-read-password})
 
     (let [secret (.getBytes "critical-business-data")
-          enc    (server/encrypt secret)]
+          enc    (bailey/encrypt secret)]
 
       ;; 2. DISASTER: "Forget" the server memory
       (reset! @#'server/server-keychain!!* nil)
 
       ;; 3. RECOVERY: Simulate Admin using the "Safe" key
-      (let [path-to-encrypted-kc (fs/path *test-secrets-dir* "keychain.encrypted")
+      (let [path-to-encrypted-kc *test-keychain-path*
             path-to-offline-kc   (fs/path *test-secrets-dir* "OFFLINE_backup_keychain.enc")
 
             ;; Admin unlocks the offline keychain
@@ -142,15 +145,15 @@
 (deftest test-belt-and-suspenders
   (testing "Data encrypted with include-backup? can be recovered even if server keychain is DELETED"
 
-    (server/init! {:secrets-dir *test-secrets-dir*
+    (bailey/init! {:keychain-path *test-keychain-path*
                    :read-server-password!! mock-read-password})
 
     (let [secret (.getBytes "nuclear-launch-codes")
           ;; Encrypt using the redundant method
-          enc    (server/encrypt secret {:include-backup? true})]
+          enc    (bailey/encrypt-critical secret)]
 
       ;; DISASTER: Delete the server keychain file entirely!
-      (fs/delete (fs/path *test-secrets-dir* "keychain.encrypted"))
+      (fs/delete *test-keychain-path*)
       (reset! @#'server/server-keychain!!* nil)
 
       ;; RECOVERY: We don't need the server keychain. We use the offline key directly.

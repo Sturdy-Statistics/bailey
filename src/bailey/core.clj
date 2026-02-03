@@ -29,10 +29,11 @@
   "Initializes the security subsystem.
 
    - Loads the embedded backup public key from the classpath.
-   - Loads (or creates) the server keychain from `secrets-dir`.
+   - Loads (or creates) the server keychain from `keychain-path`.
    - Unlocks the keychain using the TPM-sealed password.
 
    Arguments:
+     keychain-path          - path to save server keys
      read-server-password!! - (fn []) returning byte[] of the TPM password."
   [opts]
   (server/init! opts))

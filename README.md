@@ -2,7 +2,11 @@
 
 [![Clojars Project](https://img.shields.io/clojars/v/com.sturdystats/bailey.svg)](https://clojars.org/com.sturdystats/bailey)
 
-**Bailey** is a small, opinionated Clojure library for managing **server-side encryption keys** with strong operational safety guarantees.
+**Bailey** is a small, opinionated Clojure library for managing **server-side encryption keys** with strong operational safety.
+
+Bailey was originally developed to meet the internal security and operational requirements of **Sturdy Statistics**. 
+It is published as open source to support transparency, auditability, and reuse, but its design is intentionally conservative and driven by real production needs.
+We may not accept feature requests that dilute its focus.
 
 It is designed for applications that need:
 - deterministic, auditable encryption
@@ -31,7 +35,7 @@ Bailey is built around a few explicit goals:
 - **Recoverability without fragility**
   Encrypted data must remain recoverable even if:
   - the server is lost
-  - the encrypted keychain file is deleted
+  - the encrypted keychain file is corrupted or deleted
   - routine credentials are rotated or invalidated
 
 - **Operational clarity**
@@ -132,7 +136,7 @@ Run **once**, offline or in CI:
  {:secrets-dir "var/bailey"
   :read-server-password!!
   (fn []
-    ;; must return a fresh byte[] each call
+    ;; must return a fresh byte[] each call; result zero'd in place after use
     (read-tpm-sealed-secret))})
 ```
 
@@ -190,8 +194,6 @@ This is a deliberate, manual process by design.
 - Disable core dumps for production services
 - Run the application with least privilege
 - Keep offline backup keys truly offline
-
-Bailey handles key *mechanics* — operational security remains your responsibility.
 
 ## License
 

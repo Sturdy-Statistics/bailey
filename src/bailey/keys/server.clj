@@ -17,21 +17,18 @@
 
 (def ^:private backup-public-key* (atom nil))
 (def ^:private server-keychain!!* (atom nil))
-(def ^:private secrets-dir* (atom nil))
+(def ^:private keychain-path* (atom nil))
 
-(defn- set-secrets-dir [path]
-  (reset! secrets-dir* path))
+(defn- set-keychain-path [path]
+  (reset! keychain-path* path))
 
-(defn- require-secrets-dir []
-  (or @secrets-dir*
-      (throw (ex-info "Server key not loaded. HINT: Did you run `init!`?" {}))))
+(defn- require-keychain-path []
+  (or @keychain-path*
+      (throw (ex-info "Server key path not set. HINT: Did you run `init!`?" {}))))
 
 (defn- require-server-key!! []
   (or @server-keychain!!*
       (throw (ex-info "Server key not loaded. HINT: Did you run `init!`?" {}))))
-
-(defn- keychain-path []
-  (fs/path (require-secrets-dir) "keychain.encrypted"))
 
 ;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; backup key: Sturdy Stats; longterm
@@ -67,7 +64,7 @@
 
 (defn- ensure-tempel-keychain!
   [password!!]
-  (let [p (keychain-path)]
+  (let [p (require-keychain-path)]
     (when-not (fs/exists? p)
       (let [backup-key (require-backup-key)
 
@@ -103,8 +100,8 @@
 
 (defn init!
   "Initialize server encryption keys.  Should be called on server startup"
-  [{:keys [secrets-dir read-server-password!!]}]
-  (set-secrets-dir secrets-dir)
+  [{:keys [keychain-path read-server-password!!]}]
+  (set-keychain-path keychain-path)
   (load-backup-public-key)
   (load-keychain!! read-server-password!!))
 
@@ -164,7 +161,7 @@
                          :backup-key backup-key})]
 
         ;; atomic write to disk
-        (-> (keychain-path)
+        (-> (require-keychain-path)
             (sfs/spit-bytes! final-kc-e {:atomic? true})
             sfs/chmod-600!)
 
