@@ -95,3 +95,26 @@
    WARNING: Adds significant size overhead (~500 bytes)."
   [data]
   (server/encrypt data {:include-backup? true}))
+
+;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; 4. Inter-Server Communication
+;;;    Tools for securing payloads between distinct servers.
+
+(defn export-public-key
+  "Returns this server's public key as a byte array.
+   Share this with other servers to allow them to encrypt payloads intended
+   specifically for this server."
+  ^bytes []
+  (server/export-public-key))
+
+(defn encrypt-for-recipient
+  "Encrypts `data` (byte[]) for another server using its public key.
+   Returns encrypted bytes."
+  ^bytes [^bytes data ^bytes recipient-public-key-bytes]
+  (server/encrypt-for-recipient data recipient-public-key-bytes))
+
+(defn decrypt-asymmetric
+  "Decrypts `ciphertext` (byte[]) that was encrypted for this server's
+   public key."
+  ^bytes [^bytes ciphertext]
+  (server/decrypt-asymmetric ciphertext))

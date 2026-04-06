@@ -188,3 +188,78 @@
       ;; (Compare bytes because 'enc' is byte[] and 'original' is string)
       (is (not (java.util.Arrays/equals (.getBytes original "UTF-8") enc))
           "Ciphertext bytes should differ from plaintext bytes"))))
+
+(deftest test-inter-server-communication
+  (testing "Servers can export public keys and use them for asymmetric encryption"
+    (bailey/init! {:keychain-path *test-keychain-path*
+                   :read-server-password!! mock-read-password})
+
+    (let [server-a-pub (bailey/export-public-key)
+          secret-msg   (.getBytes "top-secret-inter-server-payload" "UTF-8")
+
+          ;; Simulate Server B encrypting a message FOR Server A
+          ;; Server B uses Server A's thawed public key
+          enc-for-a    (bailey/encrypt-for-recipient secret-msg server-a-pub)
+
+          ;; Server A decrypts the message using its own keychain
+          decrypted    (bailey/decrypt-asymmetric enc-for-a)]
+
+      (is (not (tempel/ba= secret-msg enc-for-a)) "Ciphertext should differ from plaintext")
+      (is (tempel/ba= secret-msg decrypted) "Server A should recover the exact payload"))))
+
+(deftest test-ciphertext-tampering
+  (testing "Modified ciphertext is rejected, preventing tampering attacks"
+    (bailey/init! {:keychain-path *test-keychain-path*
+                   :read-server-password!! mock-read-password})
+
+    (let [secret   (.getBytes "sensitive-financial-data")
+          enc      (bailey/encrypt secret)
+          tampered (byte-array (alength ^bytes enc))]
+
+      ;; Copy the ciphertext and flip one byte at the end
+      (System/arraycopy enc 0 tampered 0 (alength ^bytes enc))
+      (aset-byte tampered
+                 (dec (alength ^bytes tampered))
+                 (byte (inc (aget ^bytes tampered (dec (alength ^bytes tampered))))))
+
+      (is (throws? :any (bailey/decrypt tampered))
+          "Decryption must throw an exception if the ciphertext is altered"))))
+
+(deftest test-unauthorized-asymmetric-recipient
+  (testing "A third party cannot decrypt payloads intended for this server"
+    (bailey/init! {:keychain-path *test-keychain-path*
+                   :read-server-password!! mock-read-password})
+
+    (let [server-a-pub (bailey/export-public-key)
+          secret-msg   (.getBytes "for-your-eyes-only")
+          enc-for-a    (bailey/encrypt-for-recipient secret-msg server-a-pub)
+
+          ;; "Eve" creates her own valid keychain
+          eve-kc       (tempel/keychain {})]
+
+      (is (throws? :any
+                   (tempel/decrypt-with-1-keypair enc-for-a eve-kc))
+          "Decryption must fail if attempted by a keypair other than the intended recipient"))))
+
+(deftest test-operational-edge-cases
+  (testing "System halts on incorrect server passwords"
+    ;; 1. Initialize the system properly to create the file
+    (bailey/init! {:keychain-path *test-keychain-path*
+                   :read-server-password!! mock-read-password})
+
+    ;; 2. Simulate a restart by wiping the atom
+    (reset! @#'server/server-keychain!!* nil)
+
+    ;; 3. Attempt to initialize with a bad TPM secret
+    (let [bad-tpm-fn (fn [] (.getBytes "wrong-tpm-password" "US-ASCII"))]
+      (is (throws? :any
+                   (bailey/init! {:keychain-path *test-keychain-path*
+                                  :read-server-password!! bad-tpm-fn}))
+          "Init should throw if the existing keychain cannot be unlocked")))
+
+  (testing "Truss boundaries catch nil inputs immediately"
+    (bailey/init! {:keychain-path *test-keychain-path*
+                   :read-server-password!! mock-read-password})
+
+    (is (throws? :any (bailey/encrypt nil)))
+    (is (throws? :any (bailey/decrypt nil)))))

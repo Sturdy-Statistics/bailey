@@ -1,7 +1,6 @@
 {:paths ["src" "resources"]
- :deps {org.clojure/clojure         {:mvn/version "1.12.2"}
-        babashka/fs                 {:mvn/version "0.5.27"}
-        com.sturdystats/sturdy-fs   {:mvn/version "0.1.5"}
+ :deps {babashka/fs                 {:mvn/version "0.5.27"}
+        com.sturdystats/sturdy-fs   {:mvn/version "0.1.7"}
         com.taoensso/tempel         {:mvn/version "1.1.0"}
         com.taoensso/truss          {:mvn/version "2.2.0"}
         ;;

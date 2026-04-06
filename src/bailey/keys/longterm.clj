@@ -49,7 +49,7 @@
       ;; write "resource" file (public only)
       (-> res-path
           (sfs/spit-bytes! pub {:atomic? true})
-          ;; Public keys inside git repos generally usually stay 644
+          ;; public keys generally usually stay 644
           (fs/set-posix-file-permissions "rw-r--r--"))
 
       (t/log! {:level :info

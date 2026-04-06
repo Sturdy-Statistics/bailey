@@ -89,7 +89,9 @@
     (try
       (let [p     (ensure-tempel-keychain! pw!!)
             kc-e  (sfs/slurp-bytes p)
-            kc!!  (tempel/keychain-decrypt kc-e {:password pw!!})]
+            kc!!  (or (tempel/keychain-decrypt kc-e {:password pw!!})
+                      (throw (ex-info "FATAL: Failed to decrypt server keychain. Incorrect TPM password?"
+                                      {:keychain-path p})))]
         (reset! server-keychain!!* kc!!)
         kc!!)
       (finally
@@ -175,6 +177,29 @@
 
       (finally
         (u/zero-byte-array pw!!)))))
+
+(defn export-public-key
+  "Freezes and returns this server's public key as a byte array."
+  ^bytes []
+  (let [kc!! (require-server-key!!)]
+    (tempel/keychain-freeze-public kc!!)))
+
+(defn encrypt-for-recipient
+  "Encrypts secret-data so that it can only be decrypted by the owner of
+   recipient-public-key-bytes."
+  ^bytes [^bytes secret-data ^bytes recipient-public-key-bytes]
+  (let [recipient-kc (tempel/keychain-thaw-public (have bytes? recipient-public-key-bytes))]
+    (tempel/encrypt-with-1-keypair
+     (have bytes? secret-data)
+     recipient-kc)))
+
+(defn decrypt-asymmetric
+  "Decrypts data that was encrypted specifically for this server's public key."
+  [^bytes encrypted-bytes]
+  (let [kc!! (require-server-key!!)]
+    (tempel/decrypt-with-1-keypair
+     (have bytes? encrypted-bytes)
+     kc!!)))
 
 ;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; RECOVERY TOOL (For Admin use only, locally)
