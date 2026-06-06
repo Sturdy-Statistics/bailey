@@ -103,9 +103,10 @@
 (defn init!
   "Initialize server encryption keys.  Should be called on server startup"
   [{:keys [keychain-path read-server-password!!]}]
-  (set-keychain-path keychain-path)
-  (load-backup-public-key)
-  (load-keychain!! read-server-password!!))
+  (locking server-keychain!!*
+    (set-keychain-path keychain-path)
+    (load-backup-public-key)
+    (load-keychain!! read-server-password!!)))
 
 (defn encrypt
   "Encrypt data using the loaded server keychain.
@@ -149,31 +150,32 @@
   (let [pw!! (have bytes? (read-server-password!!))]
 
     (try
-      (let [old-kc!! (require-server-key!!)
+      (locking server-keychain!!*
+        (let [old-kc!! (require-server-key!!)
 
-            ;; add new key: (:random generates a fresh key, default priority is top/primary)
-            rotated-kc!! (tempel/keychain-add-symmetric-key old-kc!! :random)
+              ;; add new key: (:random generates a fresh key, default priority is top/primary)
+              rotated-kc!! (tempel/keychain-add-symmetric-key old-kc!! :random)
 
-            ;; re-encrypt the updated keychain
-            backup-key (require-backup-key)
-            final-kc-e (tempel/keychain-encrypt
-                        rotated-kc!!
-                        {:pbkdf-nwf  :ref-1000-msecs
-                         :password   pw!!
-                         :backup-key backup-key})]
+              ;; re-encrypt the updated keychain
+              backup-key (require-backup-key)
+              final-kc-e (tempel/keychain-encrypt
+                          rotated-kc!!
+                          {:pbkdf-nwf  :ref-1000-msecs
+                           :password   pw!!
+                           :backup-key backup-key})]
 
-        ;; atomic write to disk
-        (-> (require-keychain-path)
-            (sfs/spit-bytes! final-kc-e {:atomic? true})
-            sfs/chmod-600!)
+          ;; atomic write to disk
+          (-> (require-keychain-path)
+              (sfs/spit-bytes! final-kc-e {:atomic? true})
+              sfs/chmod-600!)
 
-        ;; update memory (hot swap)
-        (reset! server-keychain!!* rotated-kc!!)
+          ;; update memory (hot swap)
+          (reset! server-keychain!!* rotated-kc!!)
 
-        (t/log! {:level :warn
-                 :id    ::rotate-server-keys
-                 :msg   "Server keys rotated successfully. Old keys retained for decryption."
-                 :data  {:total-symmetric-keys (count (:symmetric-keys rotated-kc!!))}}))
+          (t/log! {:level :warn
+                   :id    ::rotate-server-keys
+                   :msg   "Server keys rotated successfully. Old keys retained for decryption."
+                   :data  {:total-symmetric-keys (count (:symmetric-keys rotated-kc!!))}})))
 
       (finally
         (u/zero-byte-array pw!!)))))
