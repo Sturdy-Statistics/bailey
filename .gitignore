@@ -4,4 +4,6 @@ secrets
 resources/
 target/
 *.pom.asc
-
+clj-watson.properties
+*.md
+*.qmd
