@@ -133,7 +133,7 @@ Run **once**, offline or in CI:
 
 ```clojure
 (bailey.core/init!
- {:secrets-dir "var/bailey"
+ {:keychain-path "var/bailey/keychain.encrypted"
   :read-server-password!!
   (fn []
     ;; must return a fresh byte[] each call; result zero'd in place after use
@@ -166,8 +166,7 @@ This adds asymmetric backup encryption so the data is recoverable even if the se
 ### 4. Rotate server keys
 
 ```clojure
-(bailey.core/rotate-keys!
- {:read-server-password!! read-tpm-sealed-secret})
+(bailey.core/rotate-keys! read-tpm-sealed-secret)
 ```
 
 - A new symmetric key becomes primary
