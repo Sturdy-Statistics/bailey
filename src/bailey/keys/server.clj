@@ -133,7 +133,7 @@
          {:backup-key backup-key})))))
 
 (defn decrypt
-  "decypt ciphertext made using `encrypt-sym`"
+  "Decrypt ciphertext made using `encrypt`."
   [encrypted-bytes]
   (let [kc!! (require-server-key!!)]
     (tempel/decrypt-with-symmetric-key
