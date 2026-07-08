@@ -35,10 +35,10 @@
         ;; 1. Run the "Offline Admin" setup to generate backup keys
         ;;    (We mock the password prompt by passing it directly)
         (ts/with-quiet-logging
-         (longterm/generate-longterm!
-          {:secrets-dir   (str secrets)
-           :resources-dir (str resources)
-           :password      "some-special-admin-backup-password"}))
+          (longterm/generate-longterm!
+           {:secrets-dir   (str secrets)
+            :resources-dir (str resources)
+            :password      "some-special-admin-backup-password"}))
 
         ;; 2. Mock the classpath loader.
         ;;    Since we can't write to the real classpath at runtime, we override
@@ -125,17 +125,11 @@
       ;; 3. RECOVERY: Simulate Admin using the "Safe" key
       (let [path-to-encrypted-kc *test-keychain-path*
             path-to-offline-kc   (fs/path *test-secrets-dir* "OFFLINE_backup_keychain.enc")
-
-            ;; Admin unlocks the offline keychain
-            offline-kc (tempel/keychain-decrypt
-                         (sfs/slurp-bytes path-to-offline-kc)
-                         {:password "some-special-admin-backup-password"})
-
-            ;; Admin unlocks the server keychain file using the offline keychain
             recovered-server-kc
-            (tempel/keychain-decrypt
-              (sfs/slurp-bytes path-to-encrypted-kc)
-              {:backup-key offline-kc})]
+            (server/recover-keychain-file
+             path-to-encrypted-kc
+             path-to-offline-kc
+             "some-special-admin-backup-password")]
 
         ;; 4. Verify we can now decrypt the data
         #_{:clj-kondo/ignore [:redundant-let]}
