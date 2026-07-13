@@ -73,9 +73,8 @@
             kc-e  (tempel/keychain-encrypt kc!! {:pbkdf-nwf  :ref-1000-msecs
                                                  :password   (have bytes? password!!)
                                                  :backup-key backup-key})]
-        (-> p
-            (sfs/spit-bytes! kc-e {:atomic? true})
-            sfs/chmod-600!)
+        (sfs/spit-bytes! p kc-e {:atomic? true
+                                 :perms   "rw-------"})
 
         (t/log! {:level :info
                  :id ::create-server-keychain
@@ -180,9 +179,8 @@
                            :backup-key backup-key})]
 
           ;; atomic write to disk
-          (-> p
-              (sfs/spit-bytes! final-kc-e {:atomic? true})
-              sfs/chmod-600!)
+          (sfs/spit-bytes! p final-kc-e {:atomic? true
+                                         :perms   "rw-------"})
 
           ;; update memory (hot swap)
           (reset! server-keychain!!* rotated-kc!!)

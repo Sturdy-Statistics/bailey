@@ -42,15 +42,12 @@
           pub   (tempel/keychain-freeze-public kc!!)]
 
       ;; write the full key
-      (-> full-path
-          (sfs/spit-bytes! kc-e {:atomic? true})
-          sfs/chmod-400!)
+      (sfs/spit-bytes! full-path kc-e {:atomic? true
+                                       :perms   "r--------"})
 
       ;; write "resource" file (public only)
-      (-> res-path
-          (sfs/spit-bytes! pub {:atomic? true})
-          ;; public keys generally usually stay 644
-          (fs/set-posix-file-permissions "rw-r--r--"))
+      (sfs/spit-bytes! res-path pub {:atomic? true
+                                     :perms   "rw-r--r--"})
 
       (t/log! {:level :info
                :id    ::create-longterm-backup-keychain

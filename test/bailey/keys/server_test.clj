@@ -131,6 +131,47 @@
     (let [secret (.getBytes "initialized-after-retry")]
       (is (tempel/ba= secret (bailey/decrypt (bailey/encrypt secret)))))))
 
+(deftest test-sensitive-key-writes-publish-with-required-permissions
+  (testing "Sensitive files request their final permissions as part of each atomic write"
+    (let [spit-bytes!       sfs/spit-bytes!
+          writes            (atom [])
+          generated-secrets (fs/path *test-secrets-dir* "second-generation")
+          generated-res     (fs/path *test-resources-dir* "second-generation")]
+      (with-redefs [sfs/spit-bytes!
+                    (fn [p bytes opts]
+                      (swap! writes conj [(str p) opts])
+                      (spit-bytes! p bytes opts))]
+        (bailey/init! {:keychain-path *test-keychain-path*
+                       :read-server-password!! mock-read-password})
+
+        ;; Replacement must restore the required mode rather than preserve a bad one.
+        (fs/set-posix-file-permissions *test-keychain-path* "rw-r--r--")
+        (server/rotate-server-keys! mock-read-password)
+
+        (longterm/generate-longterm!
+         {:secrets-dir   (str generated-secrets)
+          :resources-dir (str generated-res)
+          :password      "another-admin-backup-password"}))
+
+      (is (= ["rw-------" "rw-------" "r--------" "rw-r--r--"]
+             (mapv (comp :perms second) @writes))
+          "Every key write should supply its final mode to sturdy-fs")
+      (is (= "rw-------"
+             (-> *test-keychain-path* fs/posix-file-permissions fs/posix->str))
+          "The server keychain should be 0600 after replacement")
+      (is (= "r--------"
+             (-> generated-secrets
+                 (fs/path "OFFLINE_backup_keychain.enc")
+                 fs/posix-file-permissions
+                 fs/posix->str))
+          "The offline backup keychain should be 0400")
+      (is (= "rw-r--r--"
+             (-> generated-res
+                 (fs/path "tempel_server_keys" "backup_pub.key")
+                 fs/posix-file-permissions
+                 fs/posix->str))
+          "The backup public key should be 0644"))))
+
 (deftest test-key-rotation
   (testing "Key rotation preserves access to old data while securing new data"
     (bailey/init! {:keychain-path *test-keychain-path*
