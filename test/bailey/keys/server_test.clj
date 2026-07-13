@@ -359,6 +359,13 @@
                  :read-server-password!! mock-read-password})
 
   (let [offline-keychain (sfs/slurp-bytes (offline-keychain-path))]
+    (testing "Non-string offline backup password is rejected at the API boundary"
+      (is (throws? :any
+                   (server/recover-keychain-file
+                    *test-keychain-path*
+                    (offline-keychain-path)
+                    nil))))
+
     (testing "Wrong offline backup password is rejected"
       (is (throws? :any
                    (server/recover-keychain-file
@@ -432,7 +439,11 @@
       ;; 2. Check encryption actually happened
       ;; (Compare bytes because 'enc' is byte[] and 'original' is string)
       (is (not (java.util.Arrays/equals (.getBytes original "UTF-8") enc))
-          "Ciphertext bytes should differ from plaintext bytes"))))
+          "Ciphertext bytes should differ from plaintext bytes")))
+
+  (testing "String convenience wrappers preserve nil"
+    (is (nil? (bailey/encrypt-string nil)))
+    (is (nil? (bailey/decrypt-string nil)))))
 
 (deftest test-inter-server-communication
   (testing "Servers can export public keys and use them for asymmetric encryption"
