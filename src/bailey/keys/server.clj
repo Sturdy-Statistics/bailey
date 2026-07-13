@@ -116,8 +116,9 @@
 (defn encrypt
   "Encrypt data using the loaded server keychain.
 
-  Note: This data is implicitly recoverable via the backup key
-  because the keychain itself is recoverable.
+  Ordinary ciphertext is recoverable via the backup key only while an intact
+  encrypted server-keychain file remains available. The caller must back up
+  that file.
 
   If `include-backup?` is truthy, also perform asymmetric encryption
   using the backup key.  This adds overhead, but guarantees the data

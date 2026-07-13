@@ -33,10 +33,7 @@ Bailey is built around a few explicit goals:
   Bailey provides *how* keys are managed, not *who* owns them or *where* secrets come from.
 
 - **Recoverability without fragility**
-  Encrypted data must remain recoverable even if:
-  - the server is lost
-  - the encrypted keychain file is corrupted or deleted
-  - routine credentials are rotated or invalidated
+  Routine encrypted data remains recoverable if the server or its TPM-bound password is lost, provided the caller retains an intact backup of the encrypted server keychain.  Data encrypted with `encrypt-critical` remains recoverable even if every copy of the server keychain is lost.
 
 - **Operational clarity**
   All key material has a clear lifecycle:
@@ -59,7 +56,8 @@ Bailey manages **three distinct layers of keys**:
 - Public key embedded in the application at build time
 - Used **only** for recovery and “belt-and-suspenders” encryption
 
-This key allows recovery even if the server’s encrypted keychain is lost or corrupted.
+This key can recover an intact encrypted server keychain without its TPM-bound password.
+It can also recover `encrypt-critical` ciphertext directly if the server keychain is lost.
 
 ### 2. Server keychain (encrypted at rest)
 
@@ -69,6 +67,8 @@ This key allows recovery even if the server’s encrypted keychain is lost or co
 - Automatically created if missing
 
 This keychain is recoverable using the offline backup key.
+The caller is responsible for backing up the encrypted keychain file.
+Ordinary ciphertext cannot be recovered if every copy of this file is deleted or irreparably corrupted.
 
 ### 3. Symmetric data encryption keys (rotatable)
 
@@ -122,7 +122,8 @@ Bailey is designed with the following assumptions:
 ### Security goals
 
 - Encrypted data remains confidential without access to active server keys
-- Loss of the encrypted keychain file does **not** cause permanent data loss
+- Loss of a server or TPM password does not cause permanent data loss when an intact backup of the encrypted server keychain is available
+- `encrypt-critical` data remains recoverable without the server keychain
 - Routine key rotation does not invalidate historical data
 - Backup recovery requires deliberate, offline action
 
@@ -172,13 +173,17 @@ If initialization throws for any reason, abort application startup rather than c
   (bailey.core/decrypt ciphertext))
 ```
 
+Ordinary encryption uses the symmetric keys in the server keychain.
+The caller must keep a durable backup of the encrypted keychain file; the offline key can unlock that backup if the TPM password or server is lost.
+
 For especially critical data:
 
 ```clojure
 (bailey.core/encrypt-critical (.getBytes "critical config"))
 ```
 
-This adds asymmetric backup encryption so the data is recoverable even if the server keychain is lost.
+This adds asymmetric backup encryption so the data is recoverable even if every copy of the server keychain is lost or corrupted.
+It incurs significant ciphertext-size overhead, so use it when recovery without the keychain is required.
 
 ### 4. Rotate server keys
 
@@ -202,12 +207,17 @@ Given:
 
 You can recover the server keychain and decrypt protected data without access to the original server.
 
+The encrypted server keychain is a required recovery artifact for ordinary ciphertext.
+Bailey does not back it up; the caller must retain an intact copy on durable storage.
+`encrypt-critical` ciphertext is the exception and can be recovered directly with the offline backup keychain and password.
+
 This is a deliberate, manual process by design.
 
 ## Operational recommendations
 
 - Use artifact signing and verification for deployed jars
 - Protect keychain directories with strict filesystem permissions
+- Back up each encrypted server keychain and test restoration of that backup
 - Run on a POSIX filesystem
 - Assign each keychain path to exactly one JVM process
 - Disable core dumps for production services

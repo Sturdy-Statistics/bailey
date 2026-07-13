@@ -57,6 +57,7 @@
 
 (defn encrypt
   "Encrypts `data` (byte[]) using the server's current primary key.
+   Recovery requires an intact copy of the encrypted server keychain.
    Returns encrypted bytes."
   ^bytes [data]
   (server/encrypt data))
