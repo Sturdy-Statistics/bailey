@@ -58,13 +58,13 @@
 (defn encrypt
   "Encrypts `data` (byte[]) using the server's current primary key.
    Returns encrypted bytes."
-  [data]
+  ^bytes [data]
   (server/encrypt data))
 
 (defn decrypt
   "Decrypts `ciphertext` (byte[]).
    Automatically selects the correct key from the server keychain."
-  [ciphertext]
+  ^bytes [ciphertext]
   (server/decrypt ciphertext))
 
 (defn encrypt-string
@@ -75,7 +75,7 @@
    alter your workflow to use byte[] instead.
 
    Returns encrypted bytes."
-  [s]
+  ^bytes [s]
   (when s
     (server/encrypt (.getBytes s "UTF-8"))))
 
@@ -98,7 +98,7 @@
    file is corrupted or deleted (e.g., highly critical configs).
 
    WARNING: Adds significant size overhead (~500 bytes)."
-  [data]
+  ^bytes [data]
   (server/encrypt data {:include-backup? true}))
 
 ;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

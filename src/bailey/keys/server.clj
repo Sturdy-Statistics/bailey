@@ -123,7 +123,7 @@
   using the backup key.  This adds overhead, but guarantees the data
   can be decrypted even if BOTH the password AND the server keychain
   are lost."
-  [secret-data & {:keys [include-backup?]}]
+  ^bytes [secret-data & {:keys [include-backup?]}]
   (let [kc!! (require-server-key!!)]
     (if-not include-backup?
       ;; simple encryption
@@ -139,7 +139,7 @@
 
 (defn decrypt
   "Decrypt ciphertext made using `encrypt`."
-  [encrypted-bytes]
+  ^bytes [encrypted-bytes]
   (let [kc!! (require-server-key!!)]
     (tempel/decrypt-with-symmetric-key
      (have bytes? encrypted-bytes)
@@ -211,7 +211,7 @@
 
 (defn decrypt-asymmetric
   "Decrypts data that was encrypted specifically for this server's public key."
-  [^bytes encrypted-bytes]
+  ^bytes [^bytes encrypted-bytes]
   (let [kc!! (require-server-key!!)]
     (tempel/decrypt-with-1-keypair
      (have bytes? encrypted-bytes)
@@ -235,7 +235,7 @@
 
 (defn decrypt-backup
   "Decodes an encrypted ciphertext using the OFFLINE full backup key."
-  [{:keys [encrypted-bytes backup-full-keychain]}]
+  ^bytes [{:keys [encrypted-bytes backup-full-keychain]}]
   (tempel/decrypt-with-symmetric-key
    (have bytes? encrypted-bytes)
    nil
