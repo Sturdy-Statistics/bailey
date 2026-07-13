@@ -109,6 +109,38 @@
                 enc-v1
                 new-kc))))))))
 
+(deftest test-key-rotation-rejects-wrong-password
+  (testing "Key rotation rejects a password that cannot unlock the on-disk keychain"
+    (bailey/init! {:keychain-path *test-keychain-path*
+                   :read-server-password!! mock-read-password})
+
+    (let [secret            (.getBytes "data-written-before-rejected-rotation")
+          encrypted         (bailey/encrypt secret)
+          keychain-before   @@#'server/server-keychain!!*
+          file-before       (sfs/slurp-bytes *test-keychain-path*)
+          rejected-password (.getBytes "wrong-tpm-password" "US-ASCII")]
+
+      (is (throws? :any
+                   (server/rotate-server-keys!
+                    (constantly rejected-password)))
+          "Rotation should fail when the supplied password cannot decrypt the current file")
+
+      (is (Arrays/equals file-before (sfs/slurp-bytes *test-keychain-path*))
+          "Rejected rotation must not modify the keychain file")
+      (is (identical? keychain-before @@#'server/server-keychain!!*)
+          "Rejected rotation must not replace the in-memory keychain")
+      (is (tempel/ba= secret (bailey/decrypt encrypted))
+          "The existing in-memory keychain should remain usable")
+      (is (every? zero? rejected-password)
+          "The rejected password byte array should be zeroed")
+
+      ;; Simulate a process restart and prove the original password still unlocks the file.
+      (reset! @#'server/server-keychain!!* nil)
+      (bailey/init! {:keychain-path *test-keychain-path*
+                     :read-server-password!! mock-read-password})
+      (is (tempel/ba= secret (bailey/decrypt encrypted))
+          "The original password should still work after a rejected rotation"))))
+
 (deftest test-disaster-recovery-file-level
   (testing "If TPM password is lost, we can recover the keychain file using offline admin keys"
 

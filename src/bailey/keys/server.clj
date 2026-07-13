@@ -140,17 +140,27 @@
      (have bytes? encrypted-bytes)
      kc!!)))
 
+(defn- validate-tpm-password
+  "validate that the TPM password can decrypt the keychain file"
+  [pw!! kc-path]
+  (let [old-kc-e (sfs/slurp-bytes kc-path)]
+    (when-not (tempel/keychain-decrypt old-kc-e {:password pw!!})
+      (throw (ex-info "FATAL: Failed to decrypt server keychain.  Incorrect TPM password?"
+                      {:keychain-path kc-path})))))
+
 (defn rotate-server-keys!
   "Generates a fresh symmetric key, promotes it to primary, and demotes existing keys.
    Updates the encrypted file on disk and the running in-memory atom.
 
-   Requires the TPM password to re-encrypt the updated keychain file."
+   Requires the current TPM password to decrypt and re-encrypt the keychain file."
   [read-server-password!!]
 
-  (let [pw!! (have bytes? (read-server-password!!))]
+  (let [p    (require-keychain-path)
+        pw!! (have bytes? (read-server-password!!))]
 
     (try
       (locking server-keychain!!*
+        (validate-tpm-password pw!! p)
         (let [old-kc!! (require-server-key!!)
 
               ;; add new key: (:random generates a fresh key, default priority is top/primary)
@@ -165,7 +175,7 @@
                            :backup-key backup-key})]
 
           ;; atomic write to disk
-          (-> (require-keychain-path)
+          (-> p
               (sfs/spit-bytes! final-kc-e {:atomic? true})
               sfs/chmod-600!)
 
