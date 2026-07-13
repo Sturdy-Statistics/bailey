@@ -23,6 +23,12 @@
 (defn mock-read-password []
   (Arrays/copyOf *mock-tpm-password* (alength *mock-tpm-password*)))
 
+(defn reset-server-state! []
+  (reset! @#'server/backup-public-key* nil)
+  (reset! @#'server/server-keychain!!* nil)
+  (reset! @#'server/keychain-path* nil)
+  (reset! @#'server/initialized?* false))
+
 (defn with-test-env [f]
   ;; Create unique temp dirs for every test run
   (let [secrets   (fs/create-temp-dir {:prefix "test-secrets"})
@@ -32,6 +38,8 @@
               *test-resources-dir* (str resources)
               *test-keychain-path* (str key-path)]
       (try
+        (reset-server-state!)
+
         ;; 1. Run the "Offline Admin" setup to generate backup keys
         ;;    (We mock the password prompt by passing it directly)
         (ts/with-quiet-logging
@@ -51,6 +59,7 @@
           (f))
 
         (finally
+          (reset-server-state!)
           (fs/delete-tree secrets)
           (fs/delete-tree resources))))))
 
@@ -71,6 +80,56 @@
 
       (is (not (tempel/ba= secret enc)) "Ciphertext should differ from plaintext")
       (is (tempel/ba= secret dec) "Decryption should restore original data"))))
+
+(deftest test-repeat-init-is-rejected-without-changing-state
+  (testing "A successful initialization is the only initialization allowed in one JVM lifecycle"
+    (bailey/init! {:keychain-path *test-keychain-path*
+                   :read-server-password!! mock-read-password})
+
+    (let [second-path        (str *test-keychain-path* ".second")
+          callback-invoked?  (atom false)
+          keychain-before    @@#'server/server-keychain!!*
+          backup-key-before  @@#'server/backup-public-key*
+          keychain-file      (sfs/slurp-bytes *test-keychain-path*)
+          second-init-error  (try
+                               (bailey/init!
+                                {:keychain-path second-path
+                                 :read-server-password!!
+                                 (fn []
+                                   (reset! callback-invoked? true)
+                                   (mock-read-password))})
+                               nil
+                               (catch Exception e
+                                 e))]
+
+      (is (instance? clojure.lang.ExceptionInfo second-init-error)
+          "A second initialization should throw")
+      (is (false? @callback-invoked?)
+          "A rejected initialization should not invoke its password callback")
+      (is (= *test-keychain-path* @@#'server/keychain-path*)
+          "A rejected initialization should not change the keychain path")
+      (is (identical? keychain-before @@#'server/server-keychain!!*)
+          "A rejected initialization should not change the server keychain")
+      (is (identical? backup-key-before @@#'server/backup-public-key*)
+          "A rejected initialization should not reload the backup key")
+      (is (Arrays/equals keychain-file (sfs/slurp-bytes *test-keychain-path*))
+          "A rejected initialization should not change the original keychain file")
+      (is (not (fs/exists? second-path))
+          "A rejected initialization should not create a second keychain file"))))
+
+(deftest test-init-can-retry-after-first-attempt-fails
+  (testing "A failed first initialization does not mark the subsystem initialized"
+    (is (throws? :any
+                 (bailey/init!
+                  {:keychain-path *test-keychain-path*
+                   :read-server-password!!
+                   (fn []
+                     (throw (ex-info "TPM unavailable" {})))})))
+
+    (bailey/init! {:keychain-path *test-keychain-path*
+                   :read-server-password!! mock-read-password})
+    (let [secret (.getBytes "initialized-after-retry")]
+      (is (tempel/ba= secret (bailey/decrypt (bailey/encrypt secret)))))))
 
 (deftest test-key-rotation
   (testing "Key rotation preserves access to old data while securing new data"
@@ -135,7 +194,7 @@
           "The rejected password byte array should be zeroed")
 
       ;; Simulate a process restart and prove the original password still unlocks the file.
-      (reset! @#'server/server-keychain!!* nil)
+      (reset-server-state!)
       (bailey/init! {:keychain-path *test-keychain-path*
                      :read-server-password!! mock-read-password})
       (is (tempel/ba= secret (bailey/decrypt encrypted))
@@ -273,8 +332,8 @@
     (bailey/init! {:keychain-path *test-keychain-path*
                    :read-server-password!! mock-read-password})
 
-    ;; 2. Simulate a restart by wiping the atom
-    (reset! @#'server/server-keychain!!* nil)
+    ;; 2. Simulate a restart by clearing process-local lifecycle state
+    (reset-server-state!)
 
     ;; 3. Attempt to initialize with a bad TPM secret
     (let [bad-tpm-fn (fn [] (.getBytes "wrong-tpm-password" "US-ASCII"))]

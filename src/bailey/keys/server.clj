@@ -18,6 +18,7 @@
 (def ^:private backup-public-key* (atom nil))
 (def ^:private server-keychain!!* (atom nil))
 (def ^:private keychain-path* (atom nil))
+(def ^:private initialized?* (atom false))
 
 (defn- set-keychain-path [path]
   (reset! keychain-path* path))
@@ -101,12 +102,16 @@
 ;;; Public API
 
 (defn init!
-  "Initialize server encryption keys.  Should be called on server startup"
+  "Initialize server encryption keys.  Should be called exactly once on server startup."
   [{:keys [keychain-path read-server-password!!]}]
   (locking server-keychain!!*
+    (when @initialized?*
+      (throw (ex-info "Server encryption keys already initialized." {})))
     (set-keychain-path keychain-path)
     (load-backup-public-key)
-    (load-keychain!! read-server-password!!)))
+    (let [kc!! (load-keychain!! read-server-password!!)]
+      (reset! initialized?* true)
+      kc!!)))
 
 (defn encrypt
   "Encrypt data using the loaded server keychain.
