@@ -19,6 +19,7 @@
 (def ^:dynamic *test-resources-dir* nil)
 (def ^:dynamic *test-keychain-path* nil)
 (def ^:dynamic *mock-tpm-password* (.getBytes "mock-tpm-password" "US-ASCII"))
+(def original-load-backup-public-key server/load-backup-public-key)
 
 (defn mock-read-password []
   (Arrays/copyOf *mock-tpm-password* (alength *mock-tpm-password*)))
@@ -28,6 +29,12 @@
   (reset! @#'server/server-keychain!!* nil)
   (reset! @#'server/keychain-path* nil)
   (reset! @#'server/initialized?* false))
+
+(defn offline-keychain-path []
+  (fs/path *test-secrets-dir* "OFFLINE_backup_keychain.enc"))
+
+(defn backup-public-key-path []
+  (fs/path *test-resources-dir* "tempel_server_keys" "backup_pub.key"))
 
 (defn with-test-env [f]
   ;; Create unique temp dirs for every test run
@@ -70,9 +77,11 @@
 
 (deftest test-happy-path
   (testing "Server initializes and performs basic encryption"
-    ;; Init
-    (bailey/init! {:keychain-path *test-keychain-path*
-                   :read-server-password!! mock-read-password})
+    (let [password!! (mock-read-password)]
+      (bailey/init! {:keychain-path *test-keychain-path*
+                     :read-server-password!! (constantly password!!)})
+      (is (every? zero? password!!)
+          "The server password should be zeroed after successful initialization"))
 
     (let [secret   (.getBytes "my-secret-data")
           enc      (bailey/encrypt secret)
@@ -80,6 +89,16 @@
 
       (is (not (tempel/ba= secret enc)) "Ciphertext should differ from plaintext")
       (is (tempel/ba= secret dec) "Decryption should restore original data"))))
+
+(deftest test-init-rejects-missing-backup-public-resource
+  (testing "The real classpath loader reports a missing backup public key"
+    (with-redefs [server/load-backup-public-key original-load-backup-public-key]
+      (is (throws? :any
+                   (bailey/init! {:keychain-path *test-keychain-path*
+                                  :read-server-password!! mock-read-password}))))
+    (is (nil? @@#'server/backup-public-key*))
+    (is (nil? @@#'server/server-keychain!!*))
+    (is (false? @@#'server/initialized?*))))
 
 (deftest test-repeat-init-is-rejected-without-changing-state
   (testing "A successful initialization is the only initialization allowed in one JVM lifecycle"
@@ -125,11 +144,78 @@
                    :read-server-password!!
                    (fn []
                      (throw (ex-info "TPM unavailable" {})))})))
+    (is (not (fs/exists? *test-keychain-path*)))
+    (is (nil? @@#'server/server-keychain!!*))
+    (is (false? @@#'server/initialized?*))
 
     (bailey/init! {:keychain-path *test-keychain-path*
                    :read-server-password!! mock-read-password})
     (let [secret (.getBytes "initialized-after-retry")]
       (is (tempel/ba= secret (bailey/decrypt (bailey/encrypt secret)))))))
+
+(deftest test-init-rejects-corrupt-key-material
+  (testing "A corrupt server keychain fails initialization without changing the file"
+    (let [corrupt-bytes (byte-array [1 2 3 4])
+          password!!   (mock-read-password)]
+      (sfs/spit-bytes! *test-keychain-path* corrupt-bytes
+                       {:atomic? true :perms "rw-------"})
+
+      (is (throws? :any
+                   (bailey/init! {:keychain-path *test-keychain-path*
+                                  :read-server-password!! (constantly password!!)})))
+      (is (Arrays/equals corrupt-bytes (sfs/slurp-bytes *test-keychain-path*))
+          "Failed initialization should not rewrite a corrupt keychain")
+      (is (every? zero? password!!)
+          "The server password should be zeroed when keychain parsing fails")
+      (is (nil? @@#'server/server-keychain!!*))
+      (is (false? @@#'server/initialized?*))))
+
+  (testing "A corrupt backup public key fails before reading the server password"
+    (reset-server-state!)
+    (sfs/spit-bytes! (backup-public-key-path) (byte-array [5 6 7 8])
+                     {:atomic? true :perms "rw-r--r--"})
+    (let [callback-invoked? (atom false)]
+      (is (throws? :any
+                   (bailey/init!
+                    {:keychain-path *test-keychain-path*
+                     :read-server-password!!
+                     (fn []
+                       (reset! callback-invoked? true)
+                       (mock-read-password))})))
+      (is (false? @callback-invoked?))
+      (is (nil? @@#'server/backup-public-key*))
+      (is (nil? @@#'server/server-keychain!!*))
+      (is (false? @@#'server/initialized?*)))))
+
+(deftest test-init-write-failure-leaves-no-keychain-and-zeros-password
+  (let [password!! (mock-read-password)]
+    (with-redefs [sfs/spit-bytes!
+                  (fn [& _]
+                    (throw (ex-info "injected write failure" {})))]
+      (is (throws? :any
+                   (bailey/init! {:keychain-path *test-keychain-path*
+                                  :read-server-password!! (constantly password!!)}))))
+    (is (not (fs/exists? *test-keychain-path*)))
+    (is (nil? @@#'server/server-keychain!!*))
+    (is (false? @@#'server/initialized?*))
+    (is (every? zero? password!!)
+        "The server password should be zeroed when the initial write fails")))
+
+(deftest test-rotation-write-failure-preserves-disk-and-memory
+  (bailey/init! {:keychain-path *test-keychain-path*
+                 :read-server-password!! mock-read-password})
+  (let [keychain-before @@#'server/server-keychain!!*
+        file-before     (sfs/slurp-bytes *test-keychain-path*)
+        password!!      (mock-read-password)]
+    (with-redefs [sfs/spit-bytes!
+                  (fn [& _]
+                    (throw (ex-info "injected write failure" {})))]
+      (is (throws? :any
+                   (server/rotate-server-keys! (constantly password!!)))))
+    (is (identical? keychain-before @@#'server/server-keychain!!*))
+    (is (Arrays/equals file-before (sfs/slurp-bytes *test-keychain-path*)))
+    (is (every? zero? password!!)
+        "The server password should be zeroed when rotation persistence fails")))
 
 (deftest test-sensitive-key-writes-publish-with-required-permissions
   (testing "Sensitive files request their final permissions as part of each atomic write"
@@ -267,6 +353,39 @@
         #_{:clj-kondo/ignore [:redundant-let]}
         (let [decrypted (tempel/decrypt-with-symmetric-key enc recovered-server-kc)]
           (is (tempel/ba= secret decrypted) "Recovered keychain should decrypt data"))))))
+
+(deftest test-recovery-rejects-invalid-credentials-and-files
+  (bailey/init! {:keychain-path *test-keychain-path*
+                 :read-server-password!! mock-read-password})
+
+  (let [offline-keychain (sfs/slurp-bytes (offline-keychain-path))]
+    (testing "Wrong offline backup password is rejected"
+      (is (throws? :any
+                   (server/recover-keychain-file
+                    *test-keychain-path*
+                    (offline-keychain-path)
+                    "wrong-backup-password"))))
+
+    (testing "Corrupt offline backup keychain is rejected"
+      (sfs/spit-bytes! (offline-keychain-path) (byte-array [9 10 11 12])
+                       {:atomic? true :perms "r--------"})
+      (is (throws? :any
+                   (server/recover-keychain-file
+                    *test-keychain-path*
+                    (offline-keychain-path)
+                    "some-special-admin-backup-password"))))
+
+    (testing "Corrupt server keychain is rejected"
+      ;; Restore the original offline keychain, then corrupt only the server keychain.
+      (sfs/spit-bytes! (offline-keychain-path) offline-keychain
+                       {:atomic? true :perms "r--------"})
+      (sfs/spit-bytes! *test-keychain-path* (byte-array [13 14 15 16])
+                       {:atomic? true :perms "rw-------"})
+      (is (throws? :any
+                   (server/recover-keychain-file
+                    *test-keychain-path*
+                    (offline-keychain-path)
+                    "some-special-admin-backup-password"))))))
 
 (deftest test-belt-and-suspenders
   (testing "Data encrypted with include-backup? can be recovered even if server keychain is DELETED"
