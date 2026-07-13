@@ -89,6 +89,18 @@ Bailey assumes **you** control:
 - how offline keys are stored
 - how artifacts are deployed and verified
 
+## Supported operating model
+
+Bailey deliberately supports a narrow deployment model:
+
+- Exactly one JVM process owns each server keychain path.  Sharing a keychain path between active processes or replicas is unsupported; JVM locking does not provide inter-process coordination.
+- The runtime calls `init!` exactly once during JVM startup.  A repeated call is rejected, and any initialization failure must be treated as fatal to application startup.
+- Bailey requires a POSIX filesystem.  Its key-file permission guarantees and operational safety contract do not apply to non-POSIX filesystems.
+- Offline backup-key generation is a one-time company ceremony run from a trusted founder
+  workstation in a dedicated process.  It is not an embeddable application or CI operation.  If backup material already exists and overwrite was not explicitly forced, the generator intentionally terminates that isolated process with a nonzero status.
+
+If an application needs active/active access to shared key files, non-POSIX portability, or embedded backup-key administration, Bailey is not currently the right lifecycle manager.
+
 ## Threat model
 
 Bailey is designed with the following assumptions:
@@ -118,7 +130,7 @@ Bailey is designed with the following assumptions:
 
 ### 1. Generate offline backup keys (admin / build-time)
 
-Run **once**, offline or in CI:
+Run **once**, offline from a trusted workstation, in a dedicated process:
 
 ```clojure
 (bailey.core/generate-backup-keys!
@@ -128,6 +140,7 @@ Run **once**, offline or in CI:
 
 - The full encrypted keychain **must be stored securely and offline**
 - The public key may be committed to version control
+- Do not invoke this function from a REPL, application server, or shared build process: its refusal-to-overwrite path intentionally terminates the JVM with a nonzero status
 
 ### 2. Initialize keys at server startup
 
@@ -144,6 +157,10 @@ This will:
 - load the embedded backup public key
 - load or create the encrypted server keychain
 - unlock it using the supplied password
+
+Call `init!` exactly once in a JVM lifecycle.
+A second call is rejected.
+If initialization throws for any reason, abort application startup rather than continuing without Bailey.
 
 ### 3. Encrypt and decrypt data
 
@@ -172,6 +189,7 @@ This adds asymmetric backup encryption so the data is recoverable even if the se
 - A new symmetric key becomes primary
 - Old keys are retained for decryption
 - The encrypted keychain file is atomically updated
+- Only the JVM process that owns this keychain path may rotate it
 
 ## Recovery
 
@@ -190,6 +208,8 @@ This is a deliberate, manual process by design.
 
 - Use artifact signing and verification for deployed jars
 - Protect keychain directories with strict filesystem permissions
+- Run on a POSIX filesystem
+- Assign each keychain path to exactly one JVM process
 - Disable core dumps for production services
 - Run the application with least privilege
 - Keep offline backup keys truly offline

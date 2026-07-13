@@ -16,6 +16,10 @@
         (String. (.readPassword c))))))
 
 (defn generate-longterm!
+  "Generate the offline backup keychain in a one-time ceremony.
+
+   Must run on a POSIX filesystem in a dedicated process. If backup material
+   already exists and `:force?` is false, intentionally terminates the JVM."
   [{:keys [secrets-dir password resources-dir force?]
     :or   {resources-dir "resources"}}]
 

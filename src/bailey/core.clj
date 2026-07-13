@@ -9,7 +9,7 @@
 
 ;;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 1. Build-Time / Admin Tools
-;;;    Run these from your laptop or CI environment.
+;;;    Run once from a trusted workstation in an isolated process.
 
 (defn generate-backup-keys!
   "Generates the offline 'Break Glass' identity.
@@ -17,7 +17,9 @@
    - Writes the FULL keychain (Private + Public) to `secrets-dir` (Keep this safe/offline!).
    - Writes the PUBLIC key to `resources-dir` (Commit this to Git).
 
-   This must be run *before* building your Uberjar."
+   This must be run *before* building your Uberjar, from a dedicated process.
+   If backup material already exists and `:force?` is false, this intentionally
+   terminates that process with a nonzero status."
   [opts]
   (admin/generate-longterm! opts))
 
@@ -31,6 +33,9 @@
    - Loads the embedded backup public key from the classpath.
    - Loads (or creates) the server keychain from `keychain-path`.
    - Unlocks the keychain using the TPM-sealed password.
+
+   Call exactly once per JVM lifecycle and treat any failure as fatal to startup.
+   Exactly one JVM process may own a given keychain path.
 
    Arguments:
      keychain-path          - path to save server keys

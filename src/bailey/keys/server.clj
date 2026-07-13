@@ -101,7 +101,8 @@
 ;;; Public API
 
 (defn init!
-  "Initialize server encryption keys.  Should be called exactly once on server startup."
+  "Initialize server encryption keys exactly once during JVM startup.
+   Treat any failure as fatal. Exactly one JVM process may own the keychain path."
   [{:keys [keychain-path read-server-password!!]}]
   (locking server-keychain!!*
     (when @initialized?*
