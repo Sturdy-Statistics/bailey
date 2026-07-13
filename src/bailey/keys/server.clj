@@ -222,11 +222,12 @@
 
 (defn recover-keychain-file
   "Decodes an encrypted keychain file using the OFFLINE full backup key.
+   `backup-password` must be a String.
    Returns the usable server keychain."
   [path-to-encrypted-keychain path-to-offline-backup-keychain backup-password]
   (let [offline-kc (tempel/keychain-decrypt
                     (sfs/slurp-bytes path-to-offline-backup-keychain)
-                    {:password backup-password})
+                    {:password (have string? backup-password)})
 
         server-kc-e (sfs/slurp-bytes path-to-encrypted-keychain)]
 
@@ -236,6 +237,8 @@
 (defn decrypt-backup
   "Decodes an encrypted ciphertext using the OFFLINE full backup key."
   ^bytes [{:keys [encrypted-bytes backup-full-keychain]}]
+  ;; There is intentionally no primary keychain: Tempel decrypts through the
+  ;; offline keychain supplied as `:backup-key`.
   (tempel/decrypt-with-symmetric-key
    (have bytes? encrypted-bytes)
    nil
